@@ -20,9 +20,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.FormatListNumbered
 import androidx.compose.material.icons.filled.Mic
@@ -43,6 +44,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -53,8 +55,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -187,10 +192,22 @@ fun MushafScreen(
                 0 -> {
                     // Mushaf View
                     Column(modifier = Modifier.fillMaxSize()) {
+                        // Aggregate all Surah names appearing on current page
+                        val surahsOnPage = remember(currentAyahs, allSurahs, pageInfo) {
+                            val ids = currentAyahs.map { it.surahNumber }.distinct()
+                            val surahMap = allSurahs.associateBy { it.id }
+                            val names = ids.mapNotNull { surahMap[it]?.nameArabic }
+                            if (names.isNotEmpty()) {
+                                names.joinToString(" • ") { "سورة $it" }
+                            } else {
+                                pageInfo?.surahNameArabic?.let { "سورة $it" } ?: ""
+                            }
+                        }
+
                         // Top Action & Status Bar
                         MushafTopBar(
                             currentPage = currentPage,
-                            surahName = pageInfo?.surahNameArabic ?: "",
+                            surahName = surahsOnPage,
                             juzNumber = pageInfo?.juzNumber ?: 1,
                             isTracking = trackingState.isTracking,
                             onToggleAutoFollow = {
@@ -204,13 +221,36 @@ fun MushafScreen(
                             onJumpToPageClicked = { showJumpDialog = true }
                         )
 
-                        // Main Page Content
-                        Box(modifier = Modifier.weight(1f)) {
+                        // Main Page Content with horizontal swipe gesture support
+                        var totalDragX by remember { mutableFloatStateOf(0f) }
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .pointerInput(currentPage) {
+                                    detectHorizontalDragGestures(
+                                        onDragEnd = {
+                                            if (totalDragX < -60f) {
+                                                // Swipe left -> advance to next page in Arabic Mushaf
+                                                viewModel.nextPage()
+                                            } else if (totalDragX > 60f) {
+                                                // Swipe right -> return to previous page in Arabic Mushaf
+                                                viewModel.previousPage()
+                                            }
+                                            totalDragX = 0f
+                                        },
+                                        onHorizontalDrag = { change, dragAmount ->
+                                            change.consume()
+                                            totalDragX += dragAmount
+                                        }
+                                    )
+                                }
+                        ) {
                             MushafPageView(
                                 pageNumber = currentPage,
                                 ayahs = currentAyahs,
                                 pageInfo = pageInfo,
-                                highlightedAyah = if (trackingState.isTracking) trackingState.currentAyah else null
+                                highlightedAyah = if (trackingState.isTracking) trackingState.currentAyah else null,
+                                surahs = allSurahs
                             )
                         }
 
@@ -356,10 +396,11 @@ private fun MushafTopBar(
     ) {
         Column {
             Text(
-                text = "سورة $surahName",
+                text = if (surahName.startsWith("سورة")) surahName else "سورة $surahName",
                 color = GoldPrimary,
                 fontSize = 17.sp,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                maxLines = 1
             )
             Text(
                 text = "صفحة ${ArabicNormalizer.toArabicDigits(currentPage)} • جزء ${ArabicNormalizer.toArabicDigits(juzNumber)}",
@@ -419,61 +460,85 @@ private fun MushafBottomControls(
 ) {
     var sliderValue by remember(currentPage) { mutableFloatStateOf(currentPage.toFloat()) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Color(0xFFF0EADB))
-            .padding(horizontal = 16.dp, vertical = 6.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFFF0EADB))
+                .padding(horizontal = 16.dp, vertical = 6.dp)
         ) {
-            // In RTL Arabic reading: Left arrow goes to next page, Right arrow goes to previous page
-            IconButton(
-                onClick = onNext,
-                enabled = currentPage < 604,
-                modifier = Modifier.testTag("next_page_button")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "الصفحة التالية",
-                    tint = if (currentPage < 604) EmeraldDark else Color.LightGray
+                // In RTL Arabic reading:
+                // Start item (placed on the RIGHT of screen) is PREVIOUS (السابق - العودة لليمين لصفحة أقل)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.testTag("prev_page_button")
+                ) {
+                    IconButton(
+                        onClick = onPrevious,
+                        enabled = currentPage > 1
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowForward,
+                            contentDescription = "الصفحة السابقة",
+                            tint = if (currentPage > 1) EmeraldDark else Color.LightGray
+                        )
+                    }
+                    Text(
+                        text = "السابق",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (currentPage > 1) EmeraldDark else Color.LightGray
+                    )
+                }
+
+                Text(
+                    text = "صفحة ${ArabicNormalizer.toArabicDigits(currentPage)} من ٦٠٤",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = EmeraldDark
                 )
+
+                // End item in RTL Row (placed on the LEFT of screen) is NEXT (التالي - التقدم لليسار لصفحة أكبر)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.testTag("next_page_button")
+                ) {
+                    Text(
+                        text = "التالي",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (currentPage < 604) EmeraldDark else Color.LightGray
+                    )
+                    IconButton(
+                        onClick = onNext,
+                        enabled = currentPage < 604
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowBack,
+                            contentDescription = "الصفحة التالية",
+                            tint = if (currentPage < 604) EmeraldDark else Color.LightGray
+                        )
+                    }
+                }
             }
 
-            Text(
-                text = "صفحة ${ArabicNormalizer.toArabicDigits(currentPage)} من ٦٠٤",
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold,
-                color = EmeraldDark
+            Slider(
+                value = sliderValue,
+                onValueChange = { sliderValue = it },
+                onValueChangeFinished = { onPageChange(sliderValue.toInt()) },
+                valueRange = 1f..604f,
+                colors = SliderDefaults.colors(
+                    thumbColor = EmeraldDark,
+                    activeTrackColor = EmeraldPrimary,
+                    inactiveTrackColor = Color.LightGray
+                ),
+                modifier = Modifier.testTag("page_slider")
             )
-
-            IconButton(
-                onClick = onPrevious,
-                enabled = currentPage > 1,
-                modifier = Modifier.testTag("prev_page_button")
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = "الصفحة السابقة",
-                    tint = if (currentPage > 1) EmeraldDark else Color.LightGray
-                )
-            }
         }
-
-        Slider(
-            value = sliderValue,
-            onValueChange = { sliderValue = it },
-            onValueChangeFinished = { onPageChange(sliderValue.toInt()) },
-            valueRange = 1f..604f,
-            colors = SliderDefaults.colors(
-                thumbColor = EmeraldDark,
-                activeTrackColor = EmeraldPrimary,
-                inactiveTrackColor = Color.LightGray
-            ),
-            modifier = Modifier.testTag("page_slider")
-        )
     }
 }

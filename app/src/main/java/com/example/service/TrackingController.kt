@@ -34,7 +34,8 @@ data class TrackingState(
     val confidence: Float = 0f,
     val isTouchLocked: Boolean = false,
     val statusText: String = "جاهز لبدء المتابعة",
-    val lastRecognizedSpeech: String = ""
+    val lastRecognizedSpeech: String = "",
+    val segmentedAyahs: List<AyahEntity> = emptyList()
 )
 
 object TrackingController {
@@ -94,7 +95,7 @@ object TrackingController {
         audioEngine?.stop()
         audioEngine = AudioEngine(context.applicationContext) { recognizedText, isPartial ->
             _state.update { it.copy(lastRecognizedSpeech = recognizedText) }
-            processRecognizedText(recognizedText, forceImmediate = !isPartial)
+            processRecognizedText(recognizedText, forceImmediate = false)
         }.also { engine ->
             engine.start()
             // Observe audio level
@@ -155,17 +156,23 @@ object TrackingController {
     }
 
     fun setCurrentPage(page: Int) {
+        val prevPage = _state.value.currentPage
         _state.update { it.copy(currentPage = page) }
         val repo = repository ?: return
-        if (_state.value.currentSurah == null) {
+        if (prevPage != page || _state.value.currentSurah == null) {
             scope.launch(Dispatchers.IO) {
                 val pageAyahs = repo.getAyahsByPageSync(page)
                 val first = pageAyahs.firstOrNull()
-                if (first != null && _state.value.currentSurah == null) {
+                if (first != null) {
                     val surah = repo.getSurah(first.surahNumber)
                     _state.update {
-                        it.copy(currentSurah = surah, currentAyah = first)
+                        it.copy(
+                            currentSurah = surah,
+                            currentAyah = first,
+                            statusText = "صفحة $page — سورة ${surah?.nameArabic ?: ""}"
+                        )
                     }
+                    stabilizer.setVerse(first.surahNumber, first.ayahNumber)
                 }
             }
         }
@@ -179,6 +186,17 @@ object TrackingController {
         _state.update { it.copy(lastRecognizedSpeech = text) }
 
         scope.launch(Dispatchers.IO) {
+            // Segment recognized speech into identified verses in real-time
+            val segmented = matcher?.segmentVerses(
+                rawText = text,
+                preferredSurah = currentSurahNum,
+                preferredAyah = currentAyahNum
+            ) ?: emptyList()
+
+            if (segmented.isNotEmpty()) {
+                _state.update { it.copy(segmentedAyahs = segmented) }
+            }
+
             val candidate = matcher?.matchText(
                 rawText = text,
                 preferredSurah = currentSurahNum,

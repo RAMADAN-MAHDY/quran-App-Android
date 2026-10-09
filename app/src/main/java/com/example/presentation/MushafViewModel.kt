@@ -149,34 +149,29 @@ class MushafViewModel(application: Application) : AndroidViewModel(application) 
 
         if (fromSearch) {
             setSearchQuery(cleanText)
-        }
-
-        // Send to TrackingController for recognition with context
-        TrackingController.processRecognizedText(cleanText, forceImmediate = true)
-
-        // For search view or direct recitation, navigate directly
-        viewModelScope.launch(Dispatchers.IO) {
-            val prefSurah = if (!fromSearch) trackingState.value.currentSurah?.id else null
-            val prefAyah = if (!fromSearch) trackingState.value.currentAyah?.ayahNumber else null
-            val match = matcher.matchText(cleanText, preferredSurah = prefSurah, preferredAyah = prefAyah)
-            if (match != null) {
-                val ayah = repository.getAyah(match.surahNumber, match.ayahNumber)
-                val page = ayah?.pageNumber ?: repository.getPageForAyah(match.surahNumber, match.ayahNumber) ?: 1
-                viewModelScope.launch(Dispatchers.Main) {
-                    loadPage(page)
-                    _selectedTab.value = 0
-                }
-            } else if (fromSearch) {
-                // Fallback: search query for Search tab only
-                val searchList = repository.search(ArabicNormalizer.normalize(cleanText))
-                if (searchList.isNotEmpty()) {
-                    val firstAyah = searchList.first()
+            viewModelScope.launch(Dispatchers.IO) {
+                val match = matcher.matchText(cleanText)
+                if (match != null) {
+                    val ayah = repository.getAyah(match.surahNumber, match.ayahNumber)
+                    val page = ayah?.pageNumber ?: repository.getPageForAyah(match.surahNumber, match.ayahNumber) ?: 1
                     viewModelScope.launch(Dispatchers.Main) {
-                        loadPage(firstAyah.pageNumber)
+                        loadPage(page)
                         _selectedTab.value = 0
+                    }
+                } else {
+                    val searchList = repository.search(ArabicNormalizer.normalize(cleanText))
+                    if (searchList.isNotEmpty()) {
+                        val firstAyah = searchList.first()
+                        viewModelScope.launch(Dispatchers.Main) {
+                            loadPage(firstAyah.pageNumber)
+                            _selectedTab.value = 0
+                        }
                     }
                 }
             }
+        } else {
+            // Live recitation: process with contextual stability via TrackingController
+            TrackingController.processRecognizedText(cleanText, forceImmediate = false)
         }
     }
 

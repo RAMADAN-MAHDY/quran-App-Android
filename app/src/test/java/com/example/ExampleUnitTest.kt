@@ -37,6 +37,25 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun testVerseStabilizer_setVerseAnchorsPosition() {
+        val stabilizer = VerseStabilizer()
+        // Page 1 navigation sets anchor to Al-Fatihah 1:1
+        stabilizer.setVerse(surahNumber = 1, ayahNumber = 1)
+        val current = stabilizer.getCurrentVerse()
+        assertNotNull(current)
+        assertEquals(1, current?.surahNumber)
+        assertEquals(1, current?.ayahNumber)
+
+        // Attempting erratic low-confidence jump to Surah Saad (38:1) must be rejected!
+        val result = stabilizer.processCandidate(
+            VerseCandidate(surahNumber = 38, ayahNumber = 1, confidence = 0.80f)
+        )
+        assertNotNull(result)
+        assertEquals(1, result?.surahNumber)
+        assertEquals(1, result?.ayahNumber)
+    }
+
+    @Test
     fun testVerseStabilizer_sequentialAyahFollowsSmoothly() {
         val stabilizer = VerseStabilizer()
 

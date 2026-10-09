@@ -26,6 +26,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -42,6 +43,7 @@ import androidx.compose.ui.unit.sp
 import com.example.core.ArabicNormalizer
 import com.example.data.local.AyahEntity
 import com.example.data.local.PageEntity
+import com.example.data.local.SurahEntity
 import com.example.ui.theme.EmeraldDark
 import com.example.ui.theme.GoldDark
 import com.example.ui.theme.GoldPrimary
@@ -50,15 +52,43 @@ import com.example.ui.theme.ParchmentLight
 import com.example.ui.theme.ParchmentSurface
 import com.example.ui.theme.TextUthmani
 
+private val BASMALAH_UTHMANI_REGEX = Regex("^[\\uFEFF\\s]*ب[\\u064B-\\u065F]*سْمِ\\s+ٱللَّهِ\\s+ٱلرَّحْمَٰنِ\\s+ٱلرَّحِيمِ\\s*")
+
+/**
+ * Strips the leading Basmalah from Ayah 1's body text when rendered in the Mushaf,
+ * because the decorative Basmalah is already displayed as a centered title header above the first Ayah.
+ * Surah Al-Fatihah (Surah 1) retains its Basmalah since it is counted as Ayah 1.
+ */
+fun cleanAyahUthmaniText(ayah: AyahEntity): String {
+    return if (ayah.surahNumber != 1 && ayah.ayahNumber == 1) {
+        BASMALAH_UTHMANI_REGEX.replace(ayah.textUthmani, "").trim()
+    } else {
+        ayah.textUthmani.removePrefix("\uFEFF").trim()
+    }
+}
+
 @Composable
 fun MushafPageView(
     pageNumber: Int,
     ayahs: List<AyahEntity>,
     pageInfo: PageEntity?,
     highlightedAyah: AyahEntity?,
+    surahs: List<SurahEntity> = emptyList(),
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
+    val surahMap = remember(surahs) { surahs.associateBy { it.id } }
+
+    // Aggregate all Surah names appearing on this page
+    val surahIdsOnPage = remember(ayahs) { ayahs.map { it.surahNumber }.distinct() }
+    val surahHeaderTitle = remember(surahIdsOnPage, surahMap, pageInfo) {
+        val names = surahIdsOnPage.mapNotNull { surahMap[it]?.nameArabic }
+        if (names.isNotEmpty()) {
+            names.joinToString(" • ") { "سورة $it" }
+        } else {
+            pageInfo?.surahNameArabic?.let { "سورة $it" } ?: ""
+        }
+    }
 
     Card(
         modifier = modifier
@@ -89,7 +119,7 @@ fun MushafPageView(
                         .fillMaxSize()
                         .padding(horizontal = 10.dp, vertical = 8.dp)
                 ) {
-                    // Page Header (Juz & Surah)
+                    // Page Header (Juz & All Surahs on Page)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -104,12 +134,13 @@ fun MushafPageView(
                             color = EmeraldDark
                         )
 
-                        // Surah Header medallion
+                        // Surah Header medallion showing all Surahs on this page
                         Text(
-                            text = "سورة ${pageInfo?.surahNameArabic ?: ""}",
+                            text = surahHeaderTitle,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
-                            color = GoldDark
+                            color = GoldDark,
+                            maxLines = 1
                         )
                     }
 
@@ -133,11 +164,12 @@ fun MushafPageView(
                         for ((surahId, surahAyahs) in groupedBySurah) {
                             val firstAyah = surahAyahs.firstOrNull()
                             if (firstAyah != null && firstAyah.ayahNumber == 1) {
-                                // Surah Banner
-                                SurahHeaderBanner(surahName = pageInfo?.surahNameArabic ?: "")
+                                // Surah Banner with the exact surah name
+                                val currentSurahName = surahMap[surahId]?.nameArabic ?: pageInfo?.surahNameArabic ?: ""
+                                SurahHeaderBanner(surahName = currentSurahName)
                                 Spacer(modifier = Modifier.height(6.dp))
 
-                                // Bismillah (except Surah At-Tawbah 9 and Surah Al-Fatihah 1 which has Bismillah as Ayah 1)
+                                // Centered Basmalah header (except Surah At-Tawbah 9 and Surah Al-Fatihah 1)
                                 if (surahId != 9 && surahId != 1) {
                                     Text(
                                         text = "بِسْمِ ٱللَّهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ",
@@ -160,6 +192,7 @@ fun MushafPageView(
                                             highlightedAyah.surahNumber == ayah.surahNumber &&
                                             highlightedAyah.ayahNumber == ayah.ayahNumber
 
+                                    val displayText = cleanAyahUthmaniText(ayah)
                                     if (isHighlighted) {
                                         withStyle(
                                             style = SpanStyle(
@@ -167,10 +200,10 @@ fun MushafPageView(
                                                 fontWeight = FontWeight.Bold
                                             )
                                         ) {
-                                            append(ayah.textUthmani)
+                                            append(displayText)
                                         }
                                     } else {
-                                        append(ayah.textUthmani)
+                                        append(displayText)
                                     }
 
                                     // Verse End Symbol with Arabic digit ﴿١﴾

@@ -35,8 +35,8 @@ class VerseStabilizer {
 
         val current = currentVerse
 
-        // 1. Initial detection or manual trigger
-        if (forceImmediate || current == null) {
+        // 1. Initial detection
+        if (current == null) {
             val newVerse = StabilizedVerse(
                 surahNumber = candidate.surahNumber,
                 ayahNumber = candidate.ayahNumber,
@@ -53,6 +53,19 @@ class VerseStabilizer {
             current.ayahNumber == candidate.ayahNumber
         ) {
             return current
+        }
+
+        // If forceImmediate is explicitly requested (e.g. manual simulation click or direct page jump)
+        if (forceImmediate) {
+            val newVerse = StabilizedVerse(
+                surahNumber = candidate.surahNumber,
+                ayahNumber = candidate.ayahNumber,
+                confidence = candidate.confidence,
+                isSequential = candidate.surahNumber == current.surahNumber && candidate.ayahNumber == current.ayahNumber + 1
+            )
+            currentVerse = newVerse
+            lastTransitionTime = now
+            return newVerse
         }
 
         // 3. Candidate is in the SAME Surah:
@@ -95,6 +108,17 @@ class VerseStabilizer {
 
         // Otherwise stay solidly locked on current verse
         return current
+    }
+
+    fun setVerse(surahNumber: Int, ayahNumber: Int) {
+        currentVerse = StabilizedVerse(
+            surahNumber = surahNumber,
+            ayahNumber = ayahNumber,
+            confidence = 1.0f,
+            isSequential = false
+        )
+        candidateWindow.clear()
+        lastTransitionTime = System.currentTimeMillis()
     }
 
     fun reset() {
