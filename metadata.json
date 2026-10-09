@@ -1,0 +1,6 @@
+{
+  "name": "متابعة التلاوة",
+  "description": "تطبيق متابعة تلاوة الإمام لحظيًا والانتقال التلقائي لصفحات المصحف الشريف أوفلاين",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
