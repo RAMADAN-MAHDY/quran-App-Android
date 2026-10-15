@@ -56,5 +56,43 @@ class ExampleRobolectricTest {
         assertEquals(2, candidate?.surahNumber)
         assertEquals(8, candidate?.ayahNumber)
     }
+
+    @Test
+    fun `recitation matcher suppresses search when query is solely Basmalah or Istiadhah`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = QuranDatabase.getDatabase(context)
+        val repo = QuranRepository(db.quranDao())
+        val matcher = RecitationMatcher(repo)
+        matcher.warmUp()
+
+        // Standalone Basmalah with active position in Surah Kahf (18:1)
+        val basmalahKahf = matcher.matchText("بسم الله الرحمن الرحيم", preferredSurah = 18, preferredAyah = 1)
+        assertNotNull(basmalahKahf)
+        assertEquals(18, basmalahKahf?.surahNumber)
+        assertEquals(1, basmalahKahf?.ayahNumber)
+
+        // Standalone Basmalah without active position returns null (no global search/jump)
+        val basmalahGlobal = matcher.matchText("بسم الله الرحمن الرحيم")
+        org.junit.Assert.assertNull(basmalahGlobal)
+
+        // Standalone Isti'adhah without active position returns null
+        val istiadhahGlobal = matcher.matchText("اعوذ بالله من الشيطان الرجيم")
+        org.junit.Assert.assertNull(istiadhahGlobal)
+    }
+
+    @Test
+    fun `recitation matcher strips Basmalah and matches subsequent verse`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = QuranDatabase.getDatabase(context)
+        val repo = QuranRepository(db.quranDao())
+        val matcher = RecitationMatcher(repo)
+        matcher.warmUp()
+
+        // Basmalah + Ayah 1 of Surah Al-Ikhlas
+        val candidate = matcher.matchText("بسم الله الرحمن الرحيم قل هو الله احد")
+        assertNotNull(candidate)
+        assertEquals(112, candidate?.surahNumber)
+        assertEquals(1, candidate?.ayahNumber)
+    }
 }
 

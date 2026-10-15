@@ -14,7 +14,8 @@ private val STOP_WORDS = setOf(
     "ذا", "ذو", "ذي", "به", "له", "كم", "هم", "هن", "انما", "كان", "كانت"
 )
 
-private val BASMALAH_CLEAN_REGEX = Regex("^(بسم\\s+الله\\s+الرحمن\\s+الرحيم|بسم\\s+الله)\\s*")
+private val BASMALAH_CLEAN_REGEX = Regex("^(بسم\\s+الله\\s+الرحمن\\s+الرحيم|بسم\\s+الله\\s+الرحمن|بسم\\s+الله)\\s*")
+private val ISTIADHAH_CLEAN_REGEX = Regex("^(اعوذ\\s+بالله\\s+من\\s+الشيطان\\s+الرجيم|اعوذ\\s+بالله\\s+من\\s+الشيطان|اعوذ\\s+بالله)\\s*")
 
 class RecitationMatcher(private val repository: QuranRepository) {
 
@@ -109,12 +110,14 @@ class RecitationMatcher(private val repository: QuranRepository) {
     ): List<AyahEntity> {
         if (!isInitialized) warmUp()
         val normalized = ArabicNormalizer.normalize(rawText).trim()
-        if (normalized.length < 3) return emptyList()
+        var cleanText = ISTIADHAH_CLEAN_REGEX.replace(normalized, "").trim()
+        cleanText = BASMALAH_CLEAN_REGEX.replace(cleanText, "").trim()
+        if (cleanText.length < 3) return emptyList()
 
-        val queryWords = normalized.split(" ").filter { it.length >= 2 }
+        val queryWords = cleanText.split(" ").filter { it.length >= 2 }
         if (queryWords.isEmpty()) return emptyList()
         val queryWordSet = queryWords.toSet()
-        val paddedQuery = " $normalized "
+        val paddedQuery = " $cleanText "
 
         // If preferredSurah is active, search within the current Surah first
         if (preferredSurah != null) {
@@ -192,46 +195,61 @@ class RecitationMatcher(private val repository: QuranRepository) {
         val normalized = ArabicNormalizer.normalize(rawText).trim()
         if (normalized.length < 2) return null
 
-        val queryWords = normalized.split(" ").filter { it.length >= 2 }
+        // Strip leading Isti'adhah and Basmalah
+        var cleanQuery = ISTIADHAH_CLEAN_REGEX.replace(normalized, "").trim()
+        cleanQuery = BASMALAH_CLEAN_REGEX.replace(cleanQuery, "").trim()
+
+        // If the recognized speech consists solely of Basmalah or Isti'adhah,
+        // suppress search and page jumps, as Basmalah precedes almost all Surahs in the Quran.
+        if (cleanQuery.length < 3) {
+            Log.d(TAG, "Standalone Basmalah or Isti'adhah detected. Suppressing search/jump.")
+            return if (preferredSurah != null && preferredAyah != null) {
+                VerseCandidate(surahNumber = preferredSurah, ayahNumber = preferredAyah, confidence = 1.0f)
+            } else {
+                null
+            }
+        }
+
+        val queryWords = cleanQuery.split(" ").filter { it.length >= 2 }
         val queryContent = queryWords.filter { !STOP_WORDS.contains(it) }
 
         // 1. Direct match for Ayat Al-Kursi (explicit name or key opening phrase)
-        if (normalized.contains("اية الكرسي") || normalized.contains("ايه الكرسي") ||
-            normalized.contains("الله لا اله الا هو الحي القيوم")
+        if (cleanQuery.contains("اية الكرسي") || cleanQuery.contains("ايه الكرسي") ||
+            cleanQuery.contains("الله لا اله الا هو الحي القيوم")
         ) {
             return VerseCandidate(surahNumber = 2, ayahNumber = 255, confidence = 1.0f)
         }
 
         // 2. Transition Cue: Surah Al-Fatihah (new Rak'ah in prayer)
         if (preferredSurah != 1) {
-            if (normalized.contains("الحمد لله رب العالمين")) {
+            if (cleanQuery.contains("الحمد لله رب العالمين")) {
                 Log.d(TAG, "Detected Al-Fatihah transition cue (Ayah 2)")
                 return VerseCandidate(surahNumber = 1, ayahNumber = 2, confidence = 1.0f)
-            } else if (normalized.contains("اياك نعبد واياك نستعين")) {
+            } else if (cleanQuery.contains("اياك نعبد واياك نستعين")) {
                 Log.d(TAG, "Detected Al-Fatihah transition cue (Ayah 5)")
                 return VerseCandidate(surahNumber = 1, ayahNumber = 5, confidence = 1.0f)
-            } else if (normalized.contains("اهدنا الصراط المستقيم")) {
+            } else if (cleanQuery.contains("اهدنا الصراط المستقيم")) {
                 Log.d(TAG, "Detected Al-Fatihah transition cue (Ayah 6)")
                 return VerseCandidate(surahNumber = 1, ayahNumber = 6, confidence = 1.0f)
             }
         }
 
-        // 4. Transition Cue: Basmalah ("بسم الله الرحمن الرحيم") starting a new Surah after Al-Fatihah
-        if (normalized.contains("بسم الله الرحمن الرحيم") || normalized.contains("بسم الله")) {
-            val afterBasmalah = normalized
-                .replace("بسم الله الرحمن الرحيم", "")
-                .replace("بسم الله", "")
-                .trim()
-            if (afterBasmalah.length >= 4) {
-                for (a in ayahCache) {
-                    if (a.ayahNumber == 1 && a.surahNumber != 1 && a.surahNumber != 9) {
-                        val score = calculateMatchScore(afterBasmalah, a)
-                        if (score >= 0.50f) {
-                            Log.d(TAG, "Basmalah new surah detected: Surah ${a.surahNumber}")
-                            return VerseCandidate(surahNumber = a.surahNumber, ayahNumber = 1, confidence = 1.0f)
-                        }
+        // 3. Transition Cue: Basmalah starting a new Surah after Al-Fatihah
+        if (normalized.contains("بسم الله")) {
+            var bestSurah1stAyah: CachedAyah? = null
+            var bestScore = 0f
+            for (a in ayahCache) {
+                if (a.ayahNumber == 1 && a.surahNumber != 1 && a.surahNumber != 9) {
+                    val score = calculateMatchScore(cleanQuery, a)
+                    if (score > bestScore) {
+                        bestScore = score
+                        bestSurah1stAyah = a
                     }
                 }
+            }
+            if (bestSurah1stAyah != null && bestScore >= 0.50f) {
+                Log.d(TAG, "Basmalah new surah detected: Surah ${bestSurah1stAyah.surahNumber} (score $bestScore)")
+                return VerseCandidate(surahNumber = bestSurah1stAyah.surahNumber, ayahNumber = 1, confidence = 1.0f)
             }
         }
 
@@ -240,7 +258,7 @@ class RecitationMatcher(private val repository: QuranRepository) {
         // =========================================================================
         if (preferredSurah != null && preferredAyah != null) {
             // First: Use real-time verse segmentation to find verses present in this speech
-            val segmented = segmentVerses(rawText, preferredSurah, preferredAyah)
+            val segmented = segmentVerses(cleanQuery, preferredSurah, preferredAyah)
             val inSurahMatches = segmented.filter { it.surahNumber == preferredSurah }
 
             if (inSurahMatches.isNotEmpty()) {
@@ -269,7 +287,7 @@ class RecitationMatcher(private val repository: QuranRepository) {
             // Step A: CURRENT ACTIVE AYAH RETENTION (For mid-verse recitations)
             val currentAyah = getCachedAyah(preferredSurah, preferredAyah)
             if (currentAyah != null) {
-                val currentScore = calculateMatchScore(normalized, currentAyah)
+                val currentScore = calculateMatchScore(cleanQuery, currentAyah)
                 val hasOverlapWithCurrent = queryContent.isNotEmpty() && queryContent.any { currentAyah.contentWords.contains(it) }
 
                 if (currentScore >= 0.20f || hasOverlapWithCurrent) {
@@ -286,7 +304,7 @@ class RecitationMatcher(private val repository: QuranRepository) {
             for (offset in 1..15) {
                 val targetAyahNum = preferredAyah + offset
                 val targetAyah = getCachedAyah(preferredSurah, targetAyahNum) ?: break
-                val score = calculateMatchScore(normalized, targetAyah)
+                val score = calculateMatchScore(cleanQuery, targetAyah)
                 val minThreshold = if (offset == 1) 0.30f else 0.40f
 
                 if (score >= minThreshold) {
@@ -304,7 +322,7 @@ class RecitationMatcher(private val repository: QuranRepository) {
                 val prevAyahNum = preferredAyah - offset
                 if (prevAyahNum >= 1) {
                     val prevAyah = getCachedAyah(preferredSurah, prevAyahNum) ?: continue
-                    val score = calculateMatchScore(normalized, prevAyah)
+                    val score = calculateMatchScore(cleanQuery, prevAyah)
                     if (score >= 0.40f) {
                         Log.d(TAG, "Repeated previous ayah in same surah ($preferredSurah:$prevAyahNum).")
                         return VerseCandidate(
@@ -321,7 +339,7 @@ class RecitationMatcher(private val repository: QuranRepository) {
             var bestInSurahScore = 0f
             for (ayah in ayahCache) {
                 if (ayah.surahNumber == preferredSurah) {
-                    val score = calculateMatchScore(normalized, ayah)
+                    val score = calculateMatchScore(cleanQuery, ayah)
                     if (score > bestInSurahScore) {
                         bestInSurahScore = score
                         bestInSurah = ayah
@@ -351,7 +369,7 @@ class RecitationMatcher(private val repository: QuranRepository) {
             var bestOtherScore = 0f
             for (ayah in ayahCache) {
                 if (ayah.surahNumber != preferredSurah) {
-                    val score = calculateMatchScore(normalized, ayah)
+                    val score = calculateMatchScore(cleanQuery, ayah)
                     val commonWordsCount = queryWords.toSet().intersect(ayah.wordSet).size
                     val verseCoverage = if (ayah.words.isNotEmpty()) commonWordsCount.toFloat() / ayah.words.size.toFloat() else 0f
 
@@ -383,7 +401,7 @@ class RecitationMatcher(private val repository: QuranRepository) {
         // =========================================================================
         // GLOBAL INITIAL SEARCH (When no active position is anchored)
         // =========================================================================
-        val globalSegmented = segmentVerses(rawText)
+        val globalSegmented = segmentVerses(cleanQuery)
         if (globalSegmented.isNotEmpty()) {
             val latest = globalSegmented.last()
             return VerseCandidate(
@@ -397,7 +415,7 @@ class RecitationMatcher(private val repository: QuranRepository) {
         var bestScore = 0f
 
         for (ayah in ayahCache) {
-            val score = calculateMatchScore(normalized, ayah)
+            val score = calculateMatchScore(cleanQuery, ayah)
             if (score > bestScore) {
                 bestScore = score
                 bestAyah = ayah
