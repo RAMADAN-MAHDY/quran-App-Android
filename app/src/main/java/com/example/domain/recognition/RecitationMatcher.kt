@@ -3,7 +3,6 @@ package com.example.domain.recognition
 import android.util.Log
 import com.example.core.ArabicNormalizer
 import com.example.data.local.AyahEntity
-import com.example.data.local.SurahEntity
 import com.example.data.repository.QuranRepository
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -32,7 +31,6 @@ class RecitationMatcher(private val repository: QuranRepository) {
     private val mutex = Mutex()
     private var isInitialized = false
     private val ayahCache = mutableListOf<CachedAyah>()
-    private val surahCache = mutableListOf<SurahEntity>()
     private val ayahMap = mutableMapOf<Pair<Int, Int>, CachedAyah>()
 
     suspend fun warmUp() {
@@ -41,10 +39,6 @@ class RecitationMatcher(private val repository: QuranRepository) {
             if (isInitialized) return
             try {
                 val ayahs = repository.getAllAyahsSync()
-                val surahs = repository.getAllSurahsSync()
-
-                surahCache.clear()
-                surahCache.addAll(surahs)
 
                 ayahCache.clear()
                 ayahMap.clear()
@@ -72,7 +66,7 @@ class RecitationMatcher(private val repository: QuranRepository) {
                     ayahMap[Pair(a.surahNumber, a.ayahNumber)] = cached
                 }
                 isInitialized = true
-                Log.d(TAG, "Quran in-memory cache initialized with ${ayahCache.size} ayahs and ${surahCache.size} surahs")
+                Log.d(TAG, "Quran in-memory cache initialized with ${ayahCache.size} ayahs")
             } catch (e: Exception) {
                 Log.e(TAG, "Error initializing ayah cache: ${e.message}")
             }
@@ -208,35 +202,7 @@ class RecitationMatcher(private val repository: QuranRepository) {
             return VerseCandidate(surahNumber = 2, ayahNumber = 255, confidence = 1.0f)
         }
 
-        // 2. Explicit Surah name request (e.g. "سورة الكهف", "سورة ق", "سورة ص", "سورة يس")
-        val hasSurahPrefix = normalized.contains("سورة") || normalized.contains("سوره")
-        if (hasSurahPrefix) {
-            val surahQuery = normalized
-                .replace("سوره", "")
-                .replace("سورة", "")
-                .trim()
-            if (surahQuery.isNotBlank()) {
-                for (surah in surahCache) {
-                    val sNorm = ArabicNormalizer.normalize(surah.nameArabic)
-                    if (surahQuery == sNorm || (surahQuery.length >= 3 && sNorm == surahQuery)) {
-                        Log.d(TAG, "Explicit surah name recognized: ${surah.nameArabic}")
-                        return VerseCandidate(surahNumber = surah.id, ayahNumber = 1, confidence = 1.0f)
-                    }
-                }
-            }
-        } else if (queryWords.size <= 2) {
-            // User just said the isolated name of a surah in voice search/input (e.g. "الفاتحة", "البقرة")
-            val isolatedName = normalized.trim()
-            for (surah in surahCache) {
-                val sNorm = ArabicNormalizer.normalize(surah.nameArabic)
-                if (isolatedName == sNorm) {
-                    Log.d(TAG, "Isolated surah name recognized: ${surah.nameArabic}")
-                    return VerseCandidate(surahNumber = surah.id, ayahNumber = 1, confidence = 1.0f)
-                }
-            }
-        }
-
-        // 3. Transition Cue: Surah Al-Fatihah (new Rak'ah in prayer)
+        // 2. Transition Cue: Surah Al-Fatihah (new Rak'ah in prayer)
         if (preferredSurah != 1) {
             if (normalized.contains("الحمد لله رب العالمين")) {
                 Log.d(TAG, "Detected Al-Fatihah transition cue (Ayah 2)")
