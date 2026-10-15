@@ -25,14 +25,18 @@ import androidx.compose.material3.Divider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -93,6 +97,58 @@ fun MushafPageView(
 ) {
     val scrollState = rememberScrollState()
     val surahMap = remember(surahs) { surahs.associateBy { it.id } }
+
+    // Maps to track character offsets, text layouts, and vertical block positions for precise auto-scrolling
+    val ayahStartOffsets = remember(ayahs) { mutableMapOf<Pair<Int, Int>, Int>() }
+    val textLayoutResults = remember(ayahs) { mutableMapOf<Int, TextLayoutResult>() }
+    val blockTopPositions = remember(ayahs) { mutableMapOf<Int, Float>() }
+
+    // Always reset scroll to top when page changes
+    LaunchedEffect(pageNumber) {
+        scrollState.scrollTo(0)
+    }
+
+    // Auto-scroll to highlighted Ayah when highlightedAyah changes
+    LaunchedEffect(highlightedAyah) {
+        if (highlightedAyah != null) {
+            val key = Pair(highlightedAyah.surahNumber, highlightedAyah.ayahNumber)
+            val charOffset = ayahStartOffsets[key]
+            val layoutResult = textLayoutResults[highlightedAyah.surahNumber]
+            val blockTop = blockTopPositions[highlightedAyah.surahNumber] ?: 0f
+
+            if (charOffset != null && layoutResult != null) {
+                val line = layoutResult.getLineForOffset(charOffset)
+                val lineTopY = layoutResult.getLineTop(line)
+                val absoluteY = (blockTop + lineTopY).toInt()
+
+                // Position the highlighted verse near 1/3 from top of scroll viewport
+                val viewportHeight = if (scrollState.viewportSize > 0) scrollState.viewportSize else 800
+                val targetScroll = (absoluteY - viewportHeight / 3).coerceIn(0, scrollState.maxValue)
+
+                if (kotlin.math.abs(scrollState.value - targetScroll) > 30) {
+                    scrollState.animateScrollTo(
+                        targetScroll,
+                        animationSpec = tween(durationMillis = 400)
+                    )
+                }
+            } else {
+                // Fallback: proportional scroll based on Ayah index if precise coordinates aren't ready
+                val index = ayahs.indexOfFirst {
+                    it.surahNumber == highlightedAyah.surahNumber && it.ayahNumber == highlightedAyah.ayahNumber
+                }
+                if (index >= 0 && ayahs.isNotEmpty() && scrollState.maxValue > 0) {
+                    val fraction = index.toFloat() / ayahs.size.toFloat()
+                    val targetScroll = (scrollState.maxValue * fraction).toInt()
+                    if (kotlin.math.abs(scrollState.value - targetScroll) > 50) {
+                        scrollState.animateScrollTo(
+                            targetScroll,
+                            animationSpec = tween(durationMillis = 400)
+                        )
+                    }
+                }
+            }
+        }
+    }
 
     // Aggregate all Surah names appearing on this page
     val surahIdsOnPage = remember(ayahs) { ayahs.map { it.surahNumber }.distinct() }
@@ -209,6 +265,9 @@ fun MushafPageView(
                             // Render Verses
                             val annotatedString = buildAnnotatedString {
                                 for (ayah in surahAyahs) {
+                                    val key = Pair(ayah.surahNumber, ayah.ayahNumber)
+                                    ayahStartOffsets[key] = length
+
                                     val isHighlighted = highlightedAyah != null &&
                                             highlightedAyah.surahNumber == ayah.surahNumber &&
                                             highlightedAyah.ayahNumber == ayah.ayahNumber
@@ -217,8 +276,7 @@ fun MushafPageView(
                                     if (isHighlighted) {
                                         withStyle(
                                             style = SpanStyle(
-                                                background = GoldPrimary.copy(alpha = 0.35f),
-                                                fontWeight = FontWeight.Bold
+                                                background = GoldPrimary.copy(alpha = 0.35f)
                                             )
                                         ) {
                                             append(displayText)
@@ -247,9 +305,15 @@ fun MushafPageView(
                                 lineHeight = 38.sp,
                                 textAlign = TextAlign.Center,
                                 color = TextUthmani,
+                                onTextLayout = { layoutResult ->
+                                    textLayoutResults[surahId] = layoutResult
+                                },
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 4.dp)
+                                    .onGloballyPositioned { coordinates ->
+                                        blockTopPositions[surahId] = coordinates.positionInParent().y
+                                    }
                             )
                         }
                     }
