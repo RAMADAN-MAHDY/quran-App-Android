@@ -59,6 +59,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -70,6 +71,7 @@ import com.example.presentation.components.RecitationSimulatorDialog
 import com.example.presentation.components.SearchView
 import com.example.presentation.components.SurahIndexView
 import com.example.presentation.components.TouchLockOverlay
+import com.example.presentation.components.formatSurahsForHeader
 import com.example.ui.theme.EmeraldDark
 import com.example.ui.theme.EmeraldPrimary
 import com.example.ui.theme.GoldPrimary
@@ -198,7 +200,7 @@ fun MushafScreen(
                             val surahMap = allSurahs.associateBy { it.id }
                             val names = ids.mapNotNull { surahMap[it]?.nameArabic }
                             if (names.isNotEmpty()) {
-                                names.joinToString(" • ") { "سورة $it" }
+                                formatSurahsForHeader(names)
                             } else {
                                 pageInfo?.surahNameArabic?.let { "سورة $it" } ?: ""
                             }
@@ -390,22 +392,27 @@ private fun MushafTopBar(
         modifier = Modifier
             .fillMaxWidth()
             .background(EmeraldDark)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Column {
+        Column(
+            modifier = Modifier.weight(1f, fill = false)
+        ) {
             Text(
                 text = if (surahName.startsWith("سورة")) surahName else "سورة $surahName",
                 color = GoldPrimary,
-                fontSize = 17.sp,
+                fontSize = 15.sp,
                 fontWeight = FontWeight.Bold,
-                maxLines = 1
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
+            Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = "صفحة ${ArabicNormalizer.toArabicDigits(currentPage)} • جزء ${ArabicNormalizer.toArabicDigits(juzNumber)}",
                 color = Color.White.copy(alpha = 0.85f),
-                fontSize = 12.sp
+                fontSize = 12.sp,
+                maxLines = 1
             )
         }
 

@@ -37,6 +37,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -67,6 +68,20 @@ fun cleanAyahUthmaniText(ayah: AyahEntity): String {
     }
 }
 
+/**
+ * Formats surah names for headers concisely.
+ * When multiple surahs appear on a page (e.g. 3 or 4 surahs), it formats as:
+ * "سورة الإخلاص - الناس" to prevent vertical line expansion and layout distortion.
+ */
+fun formatSurahsForHeader(names: List<String>): String {
+    return when {
+        names.isEmpty() -> ""
+        names.size == 1 -> "سورة ${names[0]}"
+        names.size == 2 -> "سورة ${names[0]} • ${names[1]}"
+        else -> "سورة ${names.first()} - ${names.last()}"
+    }
+}
+
 @Composable
 fun MushafPageView(
     pageNumber: Int,
@@ -84,7 +99,7 @@ fun MushafPageView(
     val surahHeaderTitle = remember(surahIdsOnPage, surahMap, pageInfo) {
         val names = surahIdsOnPage.mapNotNull { surahMap[it]?.nameArabic }
         if (names.isNotEmpty()) {
-            names.joinToString(" • ") { "سورة $it" }
+            formatSurahsForHeader(names)
         } else {
             pageInfo?.surahNameArabic?.let { "سورة $it" } ?: ""
         }
@@ -123,24 +138,30 @@ fun MushafPageView(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(bottom = 6.dp),
+                            .padding(bottom = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
                             text = "الجزء ${ArabicNormalizer.toArabicDigits(pageInfo?.juzNumber ?: 1)}",
-                            fontSize = 12.sp,
+                            fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
-                            color = EmeraldDark
+                            color = EmeraldDark,
+                            maxLines = 1
                         )
+
+                        Spacer(modifier = Modifier.width(8.dp))
 
                         // Surah Header medallion showing all Surahs on this page
                         Text(
                             text = surahHeaderTitle,
-                            fontSize = 13.sp,
+                            fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = GoldDark,
-                            maxLines = 1
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                            textAlign = TextAlign.End
                         )
                     }
 
@@ -278,11 +299,11 @@ private fun SurahHeaderBanner(surahName: String) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 8.dp)
+            .padding(vertical = 4.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(EmeraldDark)
             .border(1.dp, GoldPrimary, RoundedCornerShape(8.dp))
-            .padding(vertical = 6.dp, horizontal = 16.dp),
+            .padding(vertical = 4.dp, horizontal = 12.dp),
         contentAlignment = Alignment.Center
     ) {
         Row(
@@ -291,12 +312,12 @@ private fun SurahHeaderBanner(surahName: String) {
             Text(
                 text = "۞ ",
                 color = GoldPrimary,
-                fontSize = 16.sp
+                fontSize = 15.sp
             )
             Text(
                 text = "سُورَةُ $surahName",
                 color = Color.White,
-                fontSize = 17.sp,
+                fontSize = 16.sp,
                 fontWeight = FontWeight.Bold
             )
             Text(

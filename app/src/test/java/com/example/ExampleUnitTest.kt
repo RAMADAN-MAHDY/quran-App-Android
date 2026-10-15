@@ -132,4 +132,25 @@ class ExampleUnitTest {
         assertEquals(50, fullVerse?.surahNumber)
         assertEquals(2, fullVerse?.ayahNumber)
     }
+
+    @Test
+    fun testFormatSurahsForHeader_singleSurah() {
+        val result = com.example.presentation.components.formatSurahsForHeader(listOf("البقرة"))
+        assertEquals("سورة البقرة", result)
+    }
+
+    @Test
+    fun testFormatSurahsForHeader_twoSurahs() {
+        val result = com.example.presentation.components.formatSurahsForHeader(listOf("الانفطار", "المطففين"))
+        assertEquals("سورة الانفطار • المطففين", result)
+    }
+
+    @Test
+    fun testFormatSurahsForHeader_threeOrMoreSurahs_compactRange() {
+        val result3 = com.example.presentation.components.formatSurahsForHeader(listOf("الإخلاص", "الفلق", "الناس"))
+        assertEquals("سورة الإخلاص - الناس", result3)
+
+        val result4 = com.example.presentation.components.formatSurahsForHeader(listOf("الهمزة", "الفيل", "قريش", "الماعون"))
+        assertEquals("سورة الهمزة - الماعون", result4)
+    }
 }
