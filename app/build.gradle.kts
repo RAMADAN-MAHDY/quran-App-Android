@@ -33,7 +33,9 @@ android {
       keyPassword = System.getenv("KEY_PASSWORD")
     }
     create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
+      val customKeystore = file("${rootDir}/debug.keystore")
+      val defaultKeystore = file("${System.getProperty("user.home")}/.android/debug.keystore")
+      storeFile = if (customKeystore.exists()) customKeystore else defaultKeystore
       storePassword = "android"
       keyAlias = "androiddebugkey"
       keyPassword = "android"
@@ -52,7 +54,11 @@ android {
     debug {
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
-      signingConfig = signingConfigs.getByName("debugConfig")
+      val customKeystore = file("${rootDir}/debug.keystore")
+      val defaultKeystore = file("${System.getProperty("user.home")}/.android/debug.keystore")
+      if (customKeystore.exists() || defaultKeystore.exists()) {
+        signingConfig = signingConfigs.getByName("debugConfig")
+      }
     }
   }
   compileOptions {
