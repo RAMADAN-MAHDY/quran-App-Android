@@ -16,6 +16,7 @@ private val STOP_WORDS = setOf(
 
 private val BASMALAH_CLEAN_REGEX = Regex("^(بسم\\s+الله\\s+الرحمن\\s+الرحيم|بسم\\s+الله\\s+الرحمن|بسم\\s+الله)\\s*")
 private val ISTIADHAH_CLEAN_REGEX = Regex("^(اعوذ\\s+بالله\\s+من\\s+الشيطان\\s+الرجيم|اعوذ\\s+بالله\\s+من\\s+الشيطان|اعوذ\\s+بالله)\\s*")
+private val TAKBEER_CLEAN_REGEX = Regex("^(الله\\s+اكبر|الله\\s+أكبر|سمع\\s+الله\\s+لمن\\s+حمده|سميع\\s+الله\\s+لمن\\s+حمده|ربنا\\s+ولك\\s+الحمد|ربنا\\s+لك\\s+الحمد|السلام\\s+علیکم|استووا|استقيموا|اعتدلوا)\\s*")
 
 class RecitationMatcher(private val repository: QuranRepository) {
 
@@ -33,6 +34,7 @@ class RecitationMatcher(private val repository: QuranRepository) {
     private var isInitialized = false
     private val ayahCache = mutableListOf<CachedAyah>()
     private val ayahMap = mutableMapOf<Pair<Int, Int>, CachedAyah>()
+    private val surahMaxAyahsMap = mutableMapOf<Int, Int>()
 
     suspend fun warmUp() {
         if (isInitialized) return
@@ -43,7 +45,13 @@ class RecitationMatcher(private val repository: QuranRepository) {
 
                 ayahCache.clear()
                 ayahMap.clear()
+                surahMaxAyahsMap.clear()
                 for (a in ayahs) {
+                    val currentMax = surahMaxAyahsMap[a.surahNumber] ?: 0
+                    if (a.ayahNumber > currentMax) {
+                        surahMaxAyahsMap[a.surahNumber] = a.ayahNumber
+                    }
+
                     val norm = ArabicNormalizer.normalize(a.textNormalized).trim()
                     // Remove leading Basmalah for Ayah 1 of all surahs except Surah 1 so text matching matches pure verses
                     val cleanNorm = if (a.surahNumber != 1 && a.ayahNumber == 1) {
@@ -112,6 +120,7 @@ class RecitationMatcher(private val repository: QuranRepository) {
         val normalized = ArabicNormalizer.normalize(rawText).trim()
         var cleanText = ISTIADHAH_CLEAN_REGEX.replace(normalized, "").trim()
         cleanText = BASMALAH_CLEAN_REGEX.replace(cleanText, "").trim()
+        cleanText = TAKBEER_CLEAN_REGEX.replace(cleanText, "").trim()
         if (cleanText.length < 3) return emptyList()
 
         val queryWords = cleanText.split(" ").filter { it.length >= 2 }
@@ -195,14 +204,15 @@ class RecitationMatcher(private val repository: QuranRepository) {
         val normalized = ArabicNormalizer.normalize(rawText).trim()
         if (normalized.length < 2) return null
 
-        // Strip leading Isti'adhah and Basmalah
+        // Strip leading Isti'adhah, Basmalah, and Takbeerat
         var cleanQuery = ISTIADHAH_CLEAN_REGEX.replace(normalized, "").trim()
         cleanQuery = BASMALAH_CLEAN_REGEX.replace(cleanQuery, "").trim()
+        cleanQuery = TAKBEER_CLEAN_REGEX.replace(cleanQuery, "").trim()
 
-        // If the recognized speech consists solely of Basmalah or Isti'adhah,
-        // suppress search and page jumps, as Basmalah precedes almost all Surahs in the Quran.
+        // If the recognized speech consists solely of Basmalah, Isti'adhah or Takbeerat,
+        // suppress search and page jumps.
         if (cleanQuery.length < 3) {
-            Log.d(TAG, "Standalone Basmalah or Isti'adhah detected. Suppressing search/jump.")
+            Log.d(TAG, "Standalone Basmalah, Isti'adhah or Takbeer detected. Suppressing search/jump.")
             return if (preferredSurah != null && preferredAyah != null) {
                 VerseCandidate(surahNumber = preferredSurah, ayahNumber = preferredAyah, confidence = 1.0f)
             } else {
@@ -300,19 +310,32 @@ class RecitationMatcher(private val repository: QuranRepository) {
                 }
             }
 
-            // Step B: SEQUENTIAL FORWARD PROGRESSION IN THE SAME SURAH (+1 up to +15 ayahs)
+            // Step B: SEQUENTIAL FORWARD PROGRESSION (In same surah or into the next surah)
+            val currentSurahMax = surahMaxAyahsMap[preferredSurah] ?: 999
             for (offset in 1..15) {
                 val targetAyahNum = preferredAyah + offset
-                val targetAyah = getCachedAyah(preferredSurah, targetAyahNum) ?: break
-                val score = calculateMatchScore(cleanQuery, targetAyah)
+                val (targetSurah, targetAyah) = if (targetAyahNum <= currentSurahMax) {
+                    Pair(preferredSurah, targetAyahNum)
+                } else {
+                    if (preferredSurah < 114) {
+                        Pair(preferredSurah + 1, targetAyahNum - currentSurahMax)
+                    } else {
+                        Pair(preferredSurah, targetAyahNum)
+                    }
+                }
+
+                val cachedTarget = getCachedAyah(targetSurah, targetAyah) ?: break
+                val score = calculateMatchScore(cleanQuery, cachedTarget)
                 val minThreshold = if (offset == 1) 0.30f else 0.40f
 
                 if (score >= minThreshold) {
-                    Log.d(TAG, "Advancing sequentially to nearby ayah ($preferredSurah:$targetAyahNum) score $score.")
+                    val isNextSurah = targetSurah != preferredSurah
+                    Log.d(TAG, "Advancing sequentially to nearby ayah ($targetSurah:$targetAyah) score $score.")
                     return VerseCandidate(
-                        surahNumber = preferredSurah,
-                        ayahNumber = targetAyahNum,
-                        confidence = 1.0f
+                        surahNumber = targetSurah,
+                        ayahNumber = targetAyah,
+                        confidence = 1.0f,
+                        isSequenceMatch = isNextSurah || score >= 0.80f
                     )
                 }
             }
@@ -355,13 +378,16 @@ class RecitationMatcher(private val repository: QuranRepository) {
                 )
             }
 
-            // STRICT RESTRICTION: Retain current surah unless an entire distinct foreign verse was fully recited
-            if (queryContent.size < 4) {
+            // STRICT RESTRICTION: Retain current surah ONLY if query matches current surah well and is not at surah end
+            val currentSurahMaxAyahs = surahMaxAyahsMap[preferredSurah] ?: 999
+            val isAtSurahEnd = preferredAyah >= currentSurahMaxAyahs - 1
+
+            if (queryContent.size < 4 && bestInSurahScore >= 0.30f && !isAtSurahEnd) {
                 Log.d(TAG, "Retaining current surah ($preferredSurah:$preferredAyah).")
                 return VerseCandidate(
                     surahNumber = preferredSurah,
                     ayahNumber = preferredAyah,
-                    confidence = 0.85f
+                    confidence = 0.80f
                 )
             }
 
@@ -373,7 +399,7 @@ class RecitationMatcher(private val repository: QuranRepository) {
                     val commonWordsCount = queryWords.toSet().intersect(ayah.wordSet).size
                     val verseCoverage = if (ayah.words.isNotEmpty()) commonWordsCount.toFloat() / ayah.words.size.toFloat() else 0f
 
-                    if (score >= 0.90f && (verseCoverage >= 0.70f || commonWordsCount >= 6)) {
+                    if (score >= 0.65f && (verseCoverage >= 0.40f || commonWordsCount >= 2)) {
                         if (score > bestOtherScore) {
                             bestOtherScore = score
                             bestOtherAyah = ayah
@@ -382,12 +408,13 @@ class RecitationMatcher(private val repository: QuranRepository) {
                 }
             }
 
-            if (bestOtherAyah != null) {
-                Log.d(TAG, "High-confidence external surah transition to: Surah ${bestOtherAyah.surahNumber}:${bestOtherAyah.ayahNumber}")
+            if (bestOtherAyah != null && (bestInSurah == null || bestOtherScore > bestInSurahScore + 0.15f || isAtSurahEnd)) {
+                Log.d(TAG, "External surah match detected: Surah ${bestOtherAyah.surahNumber}:${bestOtherAyah.ayahNumber} (score $bestOtherScore)")
                 return VerseCandidate(
                     surahNumber = bestOtherAyah.surahNumber,
                     ayahNumber = bestOtherAyah.ayahNumber,
-                    confidence = bestOtherScore
+                    confidence = bestOtherScore,
+                    isSequenceMatch = true
                 )
             }
 

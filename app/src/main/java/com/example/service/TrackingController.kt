@@ -45,6 +45,9 @@ object TrackingController {
     private val stabilizer = VerseStabilizer()
     private var audioEngine: AudioEngine? = null
 
+    private var lastSpeechTimestamp: Long = 0L
+    private const val NEW_RAKAAH_SILENCE_THRESHOLD_MS = 12000L // 12 seconds
+
     private val _state = MutableStateFlow(TrackingState())
     val state: StateFlow<TrackingState> = _state.asStateFlow()
 
@@ -185,12 +188,21 @@ object TrackingController {
 
         _state.update { it.copy(lastRecognizedSpeech = text) }
 
+        val now = System.currentTimeMillis()
+        val silenceDuration = if (lastSpeechTimestamp > 0) now - lastSpeechTimestamp else 0L
+        lastSpeechTimestamp = now
+
+        val isNewRakaah = silenceDuration >= NEW_RAKAAH_SILENCE_THRESHOLD_MS
+        if (isNewRakaah) {
+            Log.d(TAG, "New Rak'ah detected after ${silenceDuration / 1000}s silence.")
+        }
+
         scope.launch(Dispatchers.IO) {
             // Segment recognized speech into identified verses in real-time
             val segmented = matcher?.segmentVerses(
                 rawText = text,
-                preferredSurah = currentSurahNum,
-                preferredAyah = currentAyahNum
+                preferredSurah = if (isNewRakaah) null else currentSurahNum,
+                preferredAyah = if (isNewRakaah) null else currentAyahNum
             ) ?: emptyList()
 
             if (segmented.isNotEmpty()) {
@@ -199,12 +211,12 @@ object TrackingController {
 
             val candidate = matcher?.matchText(
                 rawText = text,
-                preferredSurah = currentSurahNum,
-                preferredAyah = currentAyahNum
+                preferredSurah = if (isNewRakaah) null else currentSurahNum,
+                preferredAyah = if (isNewRakaah) null else currentAyahNum
             )
 
             if (candidate != null) {
-                applyCandidate(candidate, repo, forceImmediate)
+                applyCandidate(candidate, repo, forceImmediate, isNewRakaah)
             } else {
                 Log.d(TAG, "No verse match found for: $text")
                 _state.update {
@@ -232,7 +244,8 @@ object TrackingController {
                     confidence = 1.0f
                 ),
                 repo,
-                forceImmediate = true
+                forceImmediate = true,
+                isNewRakaah = false
             )
         }
     }
@@ -266,9 +279,10 @@ object TrackingController {
     private suspend fun applyCandidate(
         candidate: VerseCandidate,
         repo: QuranRepository,
-        forceImmediate: Boolean = false
+        forceImmediate: Boolean = false,
+        isNewRakaah: Boolean = false
     ) {
-        val stabilized = stabilizer.processCandidate(candidate, forceImmediate)
+        val stabilized = stabilizer.processCandidate(candidate, forceImmediate, isNewRakaah)
         if (stabilized != null) {
             val surah = repo.getSurah(stabilized.surahNumber)
             val ayah = repo.getAyah(stabilized.surahNumber, stabilized.ayahNumber)

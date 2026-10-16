@@ -4,6 +4,7 @@ data class VerseCandidate(
     val surahNumber: Int,
     val ayahNumber: Int,
     val confidence: Float,
+    val isSequenceMatch: Boolean = false,
     val timestamp: Long = System.currentTimeMillis()
 )
 
@@ -15,18 +16,26 @@ data class StabilizedVerse(
 )
 
 /**
- * Stabilizes verse detections to prevent erratic jumps and maintain smooth page transitions.
- * Stays locked on the current Ayah while reciting, prioritizes sequential progression in the current surah,
- * and strictly protects against unintended jumps to other surahs.
+ * Stabilizes verse detections to prevent erratic jumps while allowing immediate initial response
+ * and seamless redirection when subsequent verses confirm a different surah (mutashabihat resolution).
  */
 class VerseStabilizer {
     private var currentVerse: StabilizedVerse? = null
     private val candidateWindow = mutableListOf<VerseCandidate>()
     private val windowSize = 4
     private var lastTransitionTime: Long = 0
-    private val minTransitionIntervalMs = 600L
+    private val minTransitionIntervalMs = 400L
+    private var versesProcessedCount = 0
 
-    fun processCandidate(candidate: VerseCandidate, forceImmediate: Boolean = false): StabilizedVerse? {
+    // Buffer to track pending surah transition candidates for multi-verse sequence confirmation
+    private var pendingSurahCandidate: VerseCandidate? = null
+    private var pendingSurahCount = 0
+
+    fun processCandidate(
+        candidate: VerseCandidate,
+        forceImmediate: Boolean = false,
+        isNewRakaah: Boolean = false
+    ): StabilizedVerse? {
         val now = System.currentTimeMillis()
         candidateWindow.add(candidate)
         if (candidateWindow.size > windowSize) {
@@ -35,8 +44,9 @@ class VerseStabilizer {
 
         val current = currentVerse
 
-        // 1. Initial detection
-        if (current == null) {
+        // 1. Initial detection or New Rak'ah (after silence pause >= 12s):
+        // Immediately accept the candidate for instantaneous UI responsiveness!
+        if (current == null || isNewRakaah) {
             val newVerse = StabilizedVerse(
                 surahNumber = candidate.surahNumber,
                 ayahNumber = candidate.ayahNumber,
@@ -45,6 +55,9 @@ class VerseStabilizer {
             )
             currentVerse = newVerse
             lastTransitionTime = now
+            versesProcessedCount = 1
+            pendingSurahCandidate = null
+            pendingSurahCount = 0
             return newVerse
         }
 
@@ -52,6 +65,8 @@ class VerseStabilizer {
         if (current.surahNumber == candidate.surahNumber &&
             current.ayahNumber == candidate.ayahNumber
         ) {
+            pendingSurahCandidate = null
+            pendingSurahCount = 0
             return current
         }
 
@@ -65,6 +80,9 @@ class VerseStabilizer {
             )
             currentVerse = newVerse
             lastTransitionTime = now
+            versesProcessedCount = 1
+            pendingSurahCandidate = null
+            pendingSurahCount = 0
             return newVerse
         }
 
@@ -82,31 +100,55 @@ class VerseStabilizer {
                 )
                 currentVerse = newVerse
                 lastTransitionTime = now
+                versesProcessedCount++
+                pendingSurahCandidate = null
+                pendingSurahCount = 0
                 return newVerse
             }
         }
 
         // 4. Candidate is in a DIFFERENT Surah:
-        // Strictly protect against jumping out of the active surah!
-        // Allow transition only for:
-        // - Surah Al-Fatihah (new Rak'ah in prayer)
-        // - Verified high-confidence full verse / Basmalah transition (confidence >= 0.95f)
-        val isFatihahTransition = candidate.surahNumber == 1
-        val isVerifiedFullVerse = candidate.confidence >= 0.95f
+        // Accumulate pending surah candidates to require 2-3 consecutive verse matches for mid-recitation surah jumps
+        val pending = pendingSurahCandidate
+        if (pending != null && pending.surahNumber == candidate.surahNumber) {
+            pendingSurahCount++
+        } else {
+            pendingSurahCandidate = candidate
+            pendingSurahCount = 1
+        }
 
-        if ((isFatihahTransition || isVerifiedFullVerse) && (now - lastTransitionTime >= minTransitionIntervalMs)) {
+        // Dynamically allow redirection when:
+        // - 2 or more consecutive verse matches accumulated in the new surah (pendingSurahCount >= 2)
+        // - Candidate is verified by sequence match (isSequenceMatch = true)
+        // - Natural transition at surah boundary into the next surah (candidate.surahNumber == current.surahNumber + 1 && candidate.ayahNumber <= 5)
+        // - Early in recitation tracking (versesProcessedCount <= 3) with candidate confidence >= 0.70f
+        // - Surah Al-Fatihah transition cue (candidate.surahNumber == 1)
+        // - Verified high-confidence transition (candidate.confidence >= 0.85f)
+        val isMultiVerseConfirmed = pendingSurahCount >= 2
+        val isSequenceMatch = candidate.isSequenceMatch
+        val isNextSurahTransition = (candidate.surahNumber == current.surahNumber + 1) && (candidate.ayahNumber <= 5)
+        val isEarlyAdjustment = versesProcessedCount <= 3 && candidate.confidence >= 0.70f
+        val isFatihahTransition = candidate.surahNumber == 1
+        val isHighConfidenceTransition = candidate.confidence >= 0.85f
+
+        val allowSurahRedirect = isMultiVerseConfirmed || isSequenceMatch || isNextSurahTransition || isEarlyAdjustment || isFatihahTransition || isHighConfidenceTransition
+
+        if (allowSurahRedirect && (now - lastTransitionTime >= minTransitionIntervalMs)) {
             val newVerse = StabilizedVerse(
                 surahNumber = candidate.surahNumber,
                 ayahNumber = candidate.ayahNumber,
                 confidence = candidate.confidence,
-                isSequential = false
+                isSequential = candidate.surahNumber == current.surahNumber + 1 && candidate.ayahNumber == 1
             )
             currentVerse = newVerse
             lastTransitionTime = now
+            versesProcessedCount = 1
+            pendingSurahCandidate = null
+            pendingSurahCount = 0
             return newVerse
         }
 
-        // Otherwise stay solidly locked on current verse
+        // Otherwise stay locked on current verse while buffer accumulates confirmation
         return current
     }
 
@@ -119,12 +161,18 @@ class VerseStabilizer {
         )
         candidateWindow.clear()
         lastTransitionTime = System.currentTimeMillis()
+        versesProcessedCount = 1
+        pendingSurahCandidate = null
+        pendingSurahCount = 0
     }
 
     fun reset() {
         currentVerse = null
         candidateWindow.clear()
         lastTransitionTime = 0
+        versesProcessedCount = 0
+        pendingSurahCandidate = null
+        pendingSurahCount = 0
     }
 
     fun getCurrentVerse(): StabilizedVerse? = currentVerse

@@ -153,4 +153,18 @@ class ExampleUnitTest {
         val result4 = com.example.presentation.components.formatSurahsForHeader(listOf("الهمزة", "الفيل", "قريش", "الماعون"))
         assertEquals("سورة الهمزة - الماعون", result4)
     }
+
+    @Test
+    fun testVerseStabilizer_earlyAdjustmentForMutashabihat() {
+        val stabilizer = VerseStabilizer()
+        // Initial detection accepts Surah 3:2 (instant response)
+        val first = stabilizer.processCandidate(VerseCandidate(surahNumber = 3, ayahNumber = 2, confidence = 1.0f))
+        assertEquals(3, first?.surahNumber)
+
+        // Second verse candidate is sequence match in Surah 2 (2:255)
+        Thread.sleep(500)
+        val second = stabilizer.processCandidate(VerseCandidate(surahNumber = 2, ayahNumber = 255, confidence = 0.85f, isSequenceMatch = true))
+        assertEquals(2, second?.surahNumber)
+        assertEquals(255, second?.ayahNumber)
+    }
 }

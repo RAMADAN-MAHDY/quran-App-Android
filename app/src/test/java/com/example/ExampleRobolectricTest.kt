@@ -94,5 +94,37 @@ class ExampleRobolectricTest {
         assertEquals(112, candidate?.surahNumber)
         assertEquals(1, candidate?.ayahNumber)
     }
+
+    @Test
+    fun `recitation matcher advances sequentially into next surah upon surah completion`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = QuranDatabase.getDatabase(context)
+        val repo = QuranRepository(db.quranDao())
+        val matcher = RecitationMatcher(repo)
+        matcher.warmUp()
+
+        // Currently at last Ayah of Surah Al-Ikhlas (112:4)
+        // Reciter recites Ayah 1 of Surah Al-Falaq (113:1) "قل اعوذ برب الفلق"
+        val candidate = matcher.matchText("قل اعوذ برب الفلق", preferredSurah = 112, preferredAyah = 4)
+        assertNotNull(candidate)
+        assertEquals(113, candidate?.surahNumber)
+        assertEquals(1, candidate?.ayahNumber)
+    }
+
+    @Test
+    fun `recitation matcher transitions to arbitrary surah after surah completion`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = QuranDatabase.getDatabase(context)
+        val repo = QuranRepository(db.quranDao())
+        val matcher = RecitationMatcher(repo)
+        matcher.warmUp()
+
+        // Currently at last Ayah of Surah Al-Ikhlas (112:4)
+        // Reciter jumps to Surah Al-A'la (87:1) "سبح اسم ربك الاعلى" instead of sequential 113
+        val candidate = matcher.matchText("سبح اسم ربك الاعلى", preferredSurah = 112, preferredAyah = 4)
+        assertNotNull(candidate)
+        assertEquals(87, candidate?.surahNumber)
+        assertEquals(1, candidate?.ayahNumber)
+    }
 }
 
