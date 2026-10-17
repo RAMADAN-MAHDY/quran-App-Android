@@ -130,8 +130,14 @@ class MushafViewModel(application: Application) : AndroidViewModel(application) 
         }
         viewModelScope.launch(Dispatchers.IO) {
             val normalized = ArabicNormalizer.normalize(query.trim())
-            val results = repository.search(normalized)
-            _searchResults.value = results
+            // First: Try segmenting multi-verse speech into individual distinct Ayahs!
+            val segmented = matcher.segmentVerses(normalized)
+            if (segmented.isNotEmpty()) {
+                _searchResults.value = segmented
+            } else {
+                val results = repository.search(normalized)
+                _searchResults.value = results
+            }
         }
     }
 
@@ -150,12 +156,14 @@ class MushafViewModel(application: Application) : AndroidViewModel(application) 
         if (fromSearch) {
             setSearchQuery(cleanText)
             viewModelScope.launch(Dispatchers.IO) {
+                // Segment multi-verse spoken text into individual distinct Ayahs
+                val segmented = matcher.segmentVerses(cleanText)
                 val match = matcher.matchText(cleanText)
-                if (match != null) {
-                    val ayah = repository.getAyah(match.surahNumber, match.ayahNumber)
-                    val page = ayah?.pageNumber ?: repository.getPageForAyah(match.surahNumber, match.ayahNumber) ?: 1
+                val targetAyah = segmented.firstOrNull() ?: if (match != null) repository.getAyah(match.surahNumber, match.ayahNumber) else null
+
+                if (targetAyah != null) {
                     viewModelScope.launch(Dispatchers.Main) {
-                        loadPage(page)
+                        loadPage(targetAyah.pageNumber)
                         _selectedTab.value = 0
                     }
                 } else {
