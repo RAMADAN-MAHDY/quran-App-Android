@@ -316,14 +316,18 @@ fun AyahOverlay(
                                 }
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = if (trackingState.lastRecognizedSpeech.isNotBlank()) {
+                                    text = if (trackingState.segmentedAyahs.isNotEmpty()) {
+                                        trackingState.segmentedAyahs.joinToString("  ") { ayah ->
+                                            "${cleanAyahUthmaniText(ayah)} ﴿${ArabicNormalizer.toArabicDigits(ayah.ayahNumber)}﴾"
+                                        }
+                                    } else if (trackingState.lastRecognizedSpeech.isNotBlank()) {
                                         "« ${trackingState.lastRecognizedSpeech} »"
                                     } else {
                                         "« في انتظار صوت التلاوة عبر الميكروفون أو اضغط زر المايك المباشر بالأسفل... »"
                                     },
-                                    color = if (trackingState.lastRecognizedSpeech.isNotBlank()) Color.White else Color.White.copy(alpha = 0.7f),
+                                    color = if (trackingState.lastRecognizedSpeech.isNotBlank() || trackingState.segmentedAyahs.isNotEmpty()) Color.White else Color.White.copy(alpha = 0.7f),
                                     fontSize = 14.sp,
-                                    fontWeight = if (trackingState.lastRecognizedSpeech.isNotBlank()) FontWeight.Bold else FontWeight.Normal,
+                                    fontWeight = if (trackingState.lastRecognizedSpeech.isNotBlank() || trackingState.segmentedAyahs.isNotEmpty()) FontWeight.Bold else FontWeight.Normal,
                                     lineHeight = 22.sp
                                 )
                             }
